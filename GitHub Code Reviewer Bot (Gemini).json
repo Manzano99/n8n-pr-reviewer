@@ -1,0 +1,247 @@
+{
+  "name": "GitHub Code Reviewer Bot (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "owner": {
+          "__rl": true,
+          "value": "Manzano99",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "prueba_auto",
+          "mode": "list",
+          "cachedResultName": "prueba_auto",
+          "cachedResultUrl": "https://github.com/Manzano99/prueba_auto"
+        },
+        "events": [
+          "pull_request"
+        ],
+        "options": {}
+      },
+      "name": "GitHub Trigger",
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        -48
+      ],
+      "webhookId": "auto-generated",
+      "id": "a93e996a-cd5e-48dc-96ec-9682864db269",
+      "credentials": {
+        "githubApi": {
+          "id": "OaYafoPDmTEvhvNj",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.pull_request.diff_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "Download Diff",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        144,
+        -240
+      ],
+      "id": "04f4aa52-da63-48c9-9459-2c4c50a3ecfa",
+      "credentials": {
+        "githubApi": {
+          "id": "OaYafoPDmTEvhvNj",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obtener el diff del nodo anterior\nconst diff = $input.first().json.data;\nconst maxTokens = 100000;\nconst maxChars = maxTokens * 3.5;\n\n// Patrones ignorados\nconst ignoredPatterns = [\n  'package-lock.json',\n  'yarn.lock',\n  'pnpm-lock.yaml',\n  'composer.lock',\n  '.min.js',\n  '.min.css',\n  '.map',\n  'dist/',\n  'build/',\n  'node_modules/'\n];\n\n// Separar por archivos\nconst files = diff.split('diff --git');\nconst relevantFiles = files.filter(file => {\n  return !ignoredPatterns.some(pattern => file.includes(pattern));\n});\n\nlet cleanedDiff = 'diff --git' + relevantFiles.join('diff --git');\n\n// Truncar si es necesario\nif (cleanedDiff.length > maxChars) {\n  cleanedDiff = cleanedDiff.substring(0, maxChars) + \n    '\\n\\n... [Diff truncado - demasiado grande para analizar completamente]';\n}\n\n// Metadata del PR\nconst triggerJson = $('GitHub Trigger').first().json;\n\n// Buscamos el objeto \"pull_request\" donde sea que esté (en la raíz o dentro de body)\nconst prPayload = triggerJson.pull_request || (triggerJson.body && triggerJson.body.pull_request);\n\nif (!prPayload) {\n  throw new Error(\"No encuentro los datos del Pull Request. ¿Seguro que el evento es 'pull_request'?\");\n}\n\n// Ahora extraemos los datos de forma segura\nconst prNumber = prPayload.number;\nconst prTitle = prPayload.title;\nconst prAuthor = prPayload.user.login;\nconst repoOwner = prPayload.base.repo.owner.login;\nconst repoName = prPayload.base.repo.name;\n\nreturn {\n  diff: cleanedDiff,\n  prNumber: prNumber,\n  prTitle: prTitle,\n  prAuthor: prAuthor,\n  repoOwner: repoOwner,\n  repoName: repoName,\n  diffSize: cleanedDiff.length,\n  isLarge: cleanedDiff.length > maxChars\n};"
+      },
+      "name": "Clean & Validate Diff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        -48
+      ],
+      "id": "87442feb-bd95-4ac0-90d3-3479fd283588"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Extraer datos del nodo anterior\nconst diff = $input.first().json.diff || \"No diff content found\"; \nconst prTitle = $input.first().json.prTitle || \"Untitled PR\";\nconst prAuthor = $input.first().json.prAuthor || \"Unknown Author\";\nconst isLarge = $input.first().json.isLarge || false;\n\n// 2. SYSTEM PROMPT\nconst systemInstructions = `# Rol: Senior Software Engineer - Code Reviewer\n\n## Instrucciones\nRevisa el código buscando bugs, seguridad y performance.\n\n### Qué Buscar:\n1. **Bugs Lógicos:** Condiciones incorrectas, null pointer exceptions.\n2. **Seguridad:** Inyecciones, secretos expuestos.\n3. **Performance:** Bucles ineficientes.\n4. **Clean Code:** Nombres descriptivos, DRY.\n\n### Formato de Respuesta:\nUsa Markdown. Si todo está bien, responde solo \"**LGTM!**\".\nSi hay errores, usa listas de prioridades (Alta/Media/Baja).\n`;\n\n// 3. USER MESSAGE\nconst userContext = `\n## 📋 Contexto del PR\n- **Título:** ${prTitle}\n- **Autor:** @${prAuthor}\n${isLarge ? '- **Nota:** Diff truncado por tamaño\\n' : ''}\n\n## Código a revisar (git diff):\n\\`\\`\\`diff\n${diff} \n\\`\\`\\`\n`;\n\n// 4. Devolver los datos listos para el AI Agent\nreturn {\n  system_instructions: systemInstructions,\n  user_content: userContext, \n  prNumber: $input.first().json.prNumber,\n  repoOwner: $input.first().json.repoOwner,\n  repoName: $input.first().json.repoName\n};"
+      },
+      "name": "Prepare Gemini Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -48
+      ],
+      "id": "85abe4d2-fff5-4703-be13-6c3ce32e1578"
+    },
+    {
+      "parameters": {
+        "operation": "createComment",
+        "owner": {
+          "__rl": true,
+          "value": "={{ $('Clean & Validate Diff').first().json.repoOwner }}",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "={{ $('Clean & Validate Diff').first().json.repoName }}",
+          "mode": "name"
+        },
+        "issueNumber": "={{ $('Clean & Validate Diff').first().json.prNumber }}",
+        "body": "=##  Automated Code Review\n\n{{ $json.output }}\n\n---\n* Powered by Google Gemini 2.0 Flash | *"
+      },
+      "name": "Post Comment to PR",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        -48
+      ],
+      "id": "be31e234-8fee-4526-a3f4-dbea7e18cbb2",
+      "webhookId": "b3ded387-0f6a-4da5-ab40-c7725ee8d8ab",
+      "credentials": {
+        "githubApi": {
+          "id": "OaYafoPDmTEvhvNj",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {
+          "maxOutputTokens": 300,
+          "temperature": 0.3
+        }
+      },
+      "id": "780d0e9c-f927-44b2-9d7b-adcbf8fa807d",
+      "name": "Google Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        848,
+        160
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "APscqILEfHE0cB7d",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.user_content }}",
+        "options": {
+          "systemMessage": "={{ $json.system_instructions }}"
+        }
+      },
+      "id": "406bf2b3-716f-48c5-9a98-96b4dbff4efc",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        736,
+        -176
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "GitHub Trigger": {
+      "main": [
+        [
+          {
+            "node": "Download Diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Diff": {
+      "main": [
+        [
+          {
+            "node": "Clean & Validate Diff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean & Validate Diff": {
+      "main": [
+        [
+          {
+            "node": "Prepare Gemini Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Gemini Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Post Comment to PR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0da9d8ef-3d19-415e-b9b7-05b1de975ba8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0a2e4d56e671653b430a904d631b7934c02e4da9dc811c9a45d223901cc05d1a"
+  },
+  "id": "iR95cH9biGHuOQj4",
+  "tags": []
+}
